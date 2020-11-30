@@ -254,7 +254,7 @@ func (l *levantDeployment) evaluationInspector(evalID *string) error {
 				// failures.
 				if len(metrics.ConstraintFiltered) > 0 {
 					for cf := range metrics.ConstraintFiltered {
-						return fmt.Errorf("levant/deploy: task group %s failed to place %v allocs as constraint \"%s\" was filtered",
+						return fmt.Errorf("task group %s failed to place %v allocs as constraint \"%s\" was filtered",
 							group, len(metrics.ConstraintFiltered), cf)
 					}
 				}
@@ -267,7 +267,6 @@ func (l *levantDeployment) evaluationInspector(evalID *string) error {
 					eligibleNodes += cnt
 				}
 				if eligibleNodes == 0 {
-					log.Error().Msgf("levant/deploy: no nodes were eligible for evaluation")
 					return fmt.Errorf("no nodes were eligible for evaluation")
 				}
 			}
