@@ -574,6 +574,9 @@ func (l *levantDeployment) dynamicGroupCountUpdater() error {
 	for _, rGroup := range rJob.TaskGroups {
 		for _, group := range l.config.Template.Job.TaskGroups {
 			if *rGroup.Name == *group.Name {
+				if *group.Count == *rGroup.Count {
+					continue
+				}
 				log.Info().Msgf("levant/deploy: using dynamic count %v for group %s",
 					*rGroup.Count, *group.Name)
 				group.Count = rGroup.Count
