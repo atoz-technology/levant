@@ -66,8 +66,8 @@ func setLogFormat(format string) error {
 	switch format {
 	case "HUMAN":
 		w := zerolog.ConsoleWriter{
-			Out:     logWriter,
-			NoColor: true,
+			Out:        logWriter,
+			TimeFormat: "15:04:05",
 		}
 		zLog = zerolog.New(w).With().Timestamp().Logger()
 	case "JSON":

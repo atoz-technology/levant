@@ -20,7 +20,7 @@ require (
 	github.com/mitchellh/cli v1.1.0
 	github.com/mitchellh/go-wordwrap v1.0.1 // indirect
 	github.com/pkg/errors v0.9.1
-	github.com/rs/zerolog v1.6.0
+	github.com/rs/zerolog v1.20.0
 	github.com/sean-/conswriter v0.0.0-20180208195008-f5ae3917a627
 	github.com/sean-/pager v0.0.0-20180208200047-666be9bf53b5 // indirect
 	github.com/stretchr/testify v1.6.1
