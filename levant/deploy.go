@@ -144,7 +144,8 @@ func (l *levantDeployment) deploy() (success bool) {
 		// failure in an evaluation means no allocs will be placed so we exit here.
 		err = l.evaluationInspector(&eval.EvalID)
 		if err != nil {
-			log.Error().Err(err).Msg("levant/deploy: something")
+			l.failDeployement(*&eval.EvalID)
+			log.Error().Err(err).Msg("levant/deploy: evaluation failed")
 			return
 		}
 	}
@@ -236,7 +237,7 @@ func (l *levantDeployment) evaluationInspector(evalID *string) error {
 					for d := range metrics.DimensionExhausted {
 						dimension = append(dimension, d)
 					}
-					log.Error().Msgf("levant/deploy: task group %s failed to place allocs, failed on %v and exhausted %v",
+					return fmt.Errorf("task group %s failed to place allocs, failed on %v and exhausted %v",
 						group, exhausted, dimension)
 				}
 
@@ -244,7 +245,7 @@ func (l *levantDeployment) evaluationInspector(evalID *string) error {
 				// failures.
 				if len(metrics.ClassFiltered) > 0 {
 					for f := range metrics.ClassFiltered {
-						log.Error().Msgf("levant/deploy: task group %s failed to place %v allocs as class \"%s\" was filtered",
+						return fmt.Errorf("task group %s failed to place %v allocs as class \"%s\" was filtered",
 							group, len(metrics.ClassFiltered), f)
 					}
 				}
@@ -253,7 +254,7 @@ func (l *levantDeployment) evaluationInspector(evalID *string) error {
 				// failures.
 				if len(metrics.ConstraintFiltered) > 0 {
 					for cf := range metrics.ConstraintFiltered {
-						log.Error().Msgf("levant/deploy: task group %s failed to place %v allocs as constraint \"%s\" was filtered",
+						return fmt.Errorf("levant/deploy: task group %s failed to place %v allocs as constraint \"%s\" was filtered",
 							group, len(metrics.ConstraintFiltered), cf)
 					}
 				}
@@ -267,7 +268,6 @@ func (l *levantDeployment) evaluationInspector(evalID *string) error {
 				}
 				if eligibleNodes == 0 {
 					log.Error().Msgf("levant/deploy: no nodes were eligible for evaluation")
-					l.failDeployement(*evalID)
 					return fmt.Errorf("no nodes were eligible for evaluation")
 				}
 			}
