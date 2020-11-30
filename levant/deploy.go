@@ -20,8 +20,9 @@ const (
 // levantDeployment is the all deployment related objects for this Levant
 // deployment invocation.
 type levantDeployment struct {
-	nomad  *nomad.Client
-	config *DeployConfig
+	nomad       *nomad.Client
+	config      *DeployConfig
+	shownEvents map[string]struct{}
 }
 
 // DeployConfig is the set of config structs required to run a Levant deploy.
@@ -41,7 +42,7 @@ func newLevantDeployment(config *DeployConfig, nomadClient *nomad.Client) (*leva
 		config.Deploy.VaultToken = os.Getenv("VAULT_TOKEN")
 	}
 
-	dep := &levantDeployment{}
+	dep := &levantDeployment{shownEvents: make(map[string]struct{})}
 	dep.config = config
 
 	if nomadClient == nil {
@@ -328,6 +329,7 @@ func (l *levantDeployment) deploymentWatcher(depID string) (success bool) {
 		}
 
 		if meta.LastIndex <= q.WaitIndex {
+			l.showAllocEvents(dep.ID)
 			continue
 		}
 
@@ -347,12 +349,22 @@ func (l *levantDeployment) deploymentWatcher(depID string) (success bool) {
 }
 
 func (l *levantDeployment) checkDeploymentStatus(dep *nomad.Deployment, shutdownChan chan interface{}) (bool, error) {
+	l.showAllocEvents(dep.ID)
 
 	switch dep.Status {
 	case "successful":
 		log.Info().Msgf("levant/deploy: deployment %v has completed successfully", dep.ID)
 		return false, nil
 	case jobStatusRunning:
+		for k, v := range dep.TaskGroups {
+			log.Info().
+				Str("group", k).
+				Int("desired", v.DesiredTotal).
+				Int("placed", v.PlacedAllocs).
+				Int("healthy", v.HealthyAllocs).
+				Int("unhealthy", v.UnhealthyAllocs).
+				Msgf("levant/deploy: running")
+		}
 		return true, nil
 	default:
 		if shutdownChan != nil {
@@ -367,6 +379,49 @@ func (l *levantDeployment) checkDeploymentStatus(dep *nomad.Deployment, shutdown
 
 		return false, fmt.Errorf("deployment failed")
 	}
+}
+
+// find and show allocation event messages
+func (l *levantDeployment) showAllocEvents(depID string) {
+	al, _, err := l.nomad.Deployments().Allocations(depID, nil)
+	if err != nil {
+		return
+	}
+	for _, a := range al {
+		for task, s := range a.TaskStates {
+			for _, e := range s.Events {
+				// check if event is already shown
+				key := fmt.Sprintf("%s-%d-%s", e.Type, e.Time, e.DisplayMessage)
+				if _, ok := l.shownEvents[key]; ok {
+					continue
+				}
+				l.shownEvents[key] = struct{}{}
+
+				if e.DriverError != "" ||
+					e.DownloadError != "" ||
+					e.ValidationError != "" ||
+					e.SetupError != "" ||
+					e.VaultError != "" {
+					log.Error().Str("task", task).
+						Str("event_type", e.Type).
+						Msgf("levant/deploy: %s%s%s%s%s",
+							e.DriverError,
+							e.DownloadError,
+							e.ValidationError,
+							e.SetupError,
+							e.VaultError,
+						)
+					continue
+				}
+				if e.DisplayMessage != "" {
+					log.Info().Str("task", task).
+						Str("event_type", e.Type).
+						Msgf("levant/deploy: %s", e.DisplayMessage)
+				}
+			}
+		}
+	}
+
 }
 
 // canaryAutoPromote handles Levant's canary-auto-promote functionality.
