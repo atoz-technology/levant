@@ -165,7 +165,7 @@ func (l *levantDeployment) deploy() (success bool) {
 			return l.jobStatusChecker(&eval.EvalID)
 		}
 
-		log.Info().Msgf("levant/deploy: beginning deployment watcher for job")
+		log.Debug().Msgf("levant/deploy: beginning deployment watcher for job")
 
 		// Get the deploymentID from the evaluationID so that we can watch the
 		// deployment for end status.
@@ -222,7 +222,7 @@ func (l *levantDeployment) evaluationInspector(evalID *string) error {
 		switch evalInfo.Status {
 		case "complete", "failed", "canceled":
 			if len(evalInfo.FailedTGAllocs) == 0 {
-				log.Info().Msgf("levant/deploy: evaluation %s finished successfully", *evalID)
+				log.Info().Msgf("levant/deploy: evaluation %s finished successfully", shortID(*evalID))
 				return nil
 			}
 
@@ -287,7 +287,7 @@ func (l *levantDeployment) evaluationInspector(evalID *string) error {
 func (l *levantDeployment) failDeployement(evalID string) {
 	if depID, err := l.getDeploymentID(evalID); err == nil {
 		if _, _, err := l.nomad.Deployments().Fail(depID, nil); err == nil {
-			log.Info().Msgf("levant/deploy: deployment %s failed", depID)
+			log.Info().Msgf("levant/deploy: deployment %s failed", shortID(depID))
 		}
 	}
 }
@@ -309,10 +309,15 @@ func (l *levantDeployment) deploymentWatcher(depID string) (success bool) {
 
 	q := &nomad.QueryOptions{WaitIndex: 1, AllowStale: l.config.Client.AllowStale, WaitTime: wt}
 
+	lastRunningLog := time.Duration(0).Seconds()
+	showRunningLogEach := (5 * time.Second).Seconds()
 	for {
 
 		dep, meta, err := l.nomad.Deployments().Info(depID, q)
-		log.Debug().Msgf("levant/deploy: deployment %v running for %.2fs", depID, time.Since(t).Seconds())
+		if time.Since(t).Seconds() > lastRunningLog+showRunningLogEach {
+			lastRunningLog = time.Since(t).Seconds()
+			log.Debug().Msgf("levant/deploy: deployment %s running for %.2fs", shortID(depID), lastRunningLog)
+		}
 
 		// Listen for the deploymentChan closing which indicates Levant should exit
 		// the deployment watcher.
@@ -348,22 +353,33 @@ func (l *levantDeployment) deploymentWatcher(depID string) (success bool) {
 	}
 }
 
+// shrink guids
+// 313203ff-92a4-3cd4-0e79-48eebb99de7c => 313203ff
+func shortID(id string) string {
+	if parts := strings.Split(id, "-"); len(parts) > 0 && len(parts[0]) == 8 {
+		return parts[0]
+	}
+	return id
+}
+
 func (l *levantDeployment) checkDeploymentStatus(dep *nomad.Deployment, shutdownChan chan interface{}) (bool, error) {
 	l.showAllocEvents(dep.ID)
 
 	switch dep.Status {
 	case "successful":
-		log.Info().Msgf("levant/deploy: deployment %v has completed successfully", dep.ID)
+		log.Info().Msgf("levant/deploy: deployment %s has completed successfully", shortID(dep.ID))
 		return false, nil
 	case jobStatusRunning:
 		for k, v := range dep.TaskGroups {
-			log.Info().
-				Str("group", k).
-				Int("desired", v.DesiredTotal).
-				Int("placed", v.PlacedAllocs).
-				Int("healthy", v.HealthyAllocs).
-				Int("unhealthy", v.UnhealthyAllocs).
-				Msgf("levant/deploy: running")
+			if v.DesiredTotal > 1 {
+				log.Info().
+					Str("group", k).
+					Int("desired", v.DesiredTotal).
+					Int("placed", v.PlacedAllocs).
+					Int("healthy", v.HealthyAllocs).
+					Int("unhealthy", v.UnhealthyAllocs).
+					Msgf("levant/deploy: running")
+			}
 		}
 		return true, nil
 	default:
@@ -372,13 +388,22 @@ func (l *levantDeployment) checkDeploymentStatus(dep *nomad.Deployment, shutdown
 			close(shutdownChan)
 		}
 
-		log.Error().Msgf("levant/deploy: deployment %v has status %s", dep.ID, dep.Status)
+		log.Error().Msgf("levant/deploy: deployment %s has status %s", shortID(dep.ID), dep.Status)
 
 		// Launch the failure inspector.
 		l.checkFailedDeployment(&dep.ID)
 
 		return false, fmt.Errorf("deployment failed")
 	}
+}
+
+func (l *levantDeployment) isEventShown(e *nomad.TaskEvent) bool {
+	key := fmt.Sprintf("%s-%d-%s", e.Type, e.Time, e.DisplayMessage)
+	if _, ok := l.shownEvents[key]; ok {
+		return true
+	}
+	l.shownEvents[key] = struct{}{}
+	return false
 }
 
 // find and show allocation event messages
@@ -390,12 +415,9 @@ func (l *levantDeployment) showAllocEvents(depID string) {
 	for _, a := range al {
 		for task, s := range a.TaskStates {
 			for _, e := range s.Events {
-				// check if event is already shown
-				key := fmt.Sprintf("%s-%d-%s", e.Type, e.Time, e.DisplayMessage)
-				if _, ok := l.shownEvents[key]; ok {
+				if l.isEventShown(e) {
 					continue
 				}
-				l.shownEvents[key] = struct{}{}
 
 				if e.DriverError != "" ||
 					e.DownloadError != "" ||
@@ -403,8 +425,8 @@ func (l *levantDeployment) showAllocEvents(depID string) {
 					e.SetupError != "" ||
 					e.VaultError != "" {
 					log.Error().Str("task", task).
-						Str("event_type", e.Type).
-						Msgf("levant/deploy: %s%s%s%s%s",
+						Str("type", e.Type).
+						Msgf("alloc/event: %s%s%s%s%s",
 							e.DriverError,
 							e.DownloadError,
 							e.ValidationError,
@@ -415,8 +437,8 @@ func (l *levantDeployment) showAllocEvents(depID string) {
 				}
 				if e.DisplayMessage != "" {
 					log.Info().Str("task", task).
-						Str("event_type", e.Type).
-						Msgf("levant/deploy: %s", e.DisplayMessage)
+						Str("type", e.Type).
+						Msgf("alloc/event: %s", e.DisplayMessage)
 				}
 			}
 		}
@@ -434,7 +456,7 @@ func (l *levantDeployment) canaryAutoPromote(depID string, waitTime int, shutdow
 		select {
 		case <-autoPromote:
 			log.Info().Msgf("levant/deploy: auto-promote period %vs has been reached for deployment %s",
-				waitTime, depID)
+				waitTime, shortID(depID))
 
 			// Check the deployment is healthy before promoting.
 			if healthy := l.checkCanaryDeploymentHealth(depID); !healthy {
@@ -443,12 +465,12 @@ func (l *levantDeployment) canaryAutoPromote(depID string, waitTime int, shutdow
 				return
 			}
 
-			log.Info().Msgf("levant/deploy: triggering auto promote of deployment %s", depID)
+			log.Info().Msgf("levant/deploy: triggering auto promote of deployment %s", shortID(depID))
 
 			// Promote the deployment.
 			_, _, err := l.nomad.Deployments().PromoteAll(depID, nil)
 			if err != nil {
-				log.Error().Err(err).Msgf("levant/deploy: unable to promote deployment %s", depID)
+				log.Error().Err(err).Msgf("levant/deploy: unable to promote deployment %s", shortID(depID))
 				close(deploymentChan)
 				return
 			}
@@ -468,7 +490,7 @@ func (l *levantDeployment) checkCanaryDeploymentHealth(depID string) (healthy bo
 
 	dep, _, err := l.nomad.Deployments().Info(depID, &nomad.QueryOptions{AllowStale: l.config.Client.AllowStale})
 	if err != nil {
-		log.Error().Err(err).Msgf("levant/deploy: unable to query deployment %s for health", depID)
+		log.Error().Err(err).Msgf("levant/deploy: unable to query deployment %s for health", shortID(depID))
 		return
 	}
 
@@ -482,14 +504,14 @@ func (l *levantDeployment) checkCanaryDeploymentHealth(depID string) (healthy bo
 		}
 
 		if taskInfo.DesiredCanaries != taskInfo.HealthyAllocs {
-			log.Error().Msgf("levant/deploy: task %s has unhealthy allocations in deployment %s", taskName, depID)
+			log.Error().Msgf("levant/deploy: task %s has unhealthy allocations in deployment %s", taskName, shortID(depID))
 			unhealthy++
 		}
 	}
 
 	// If zero unhealthy tasks were found, continue with the auto promotion.
 	if unhealthy == 0 {
-		log.Debug().Msgf("levant/deploy: deployment %s has 0 unhealthy allocations", depID)
+		log.Debug().Msgf("levant/deploy: deployment %s has 0 unhealthy allocations", shortID(depID))
 		healthy = true
 	}
 

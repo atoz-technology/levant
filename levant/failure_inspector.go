@@ -16,8 +16,8 @@ func (l *levantDeployment) checkFailedDeployment(depID *string) {
 
 	allocs, _, err := l.nomad.Deployments().Allocations(*depID, nil)
 	if err != nil {
-		log.Error().Msgf("levant/failure_inspector: unable to query deployment allocations for deployment %v",
-			depID)
+		log.Error().Msgf("levant/failure_inspector: unable to query deployment allocations for deployment %s",
+			shortID(*depID))
 	}
 
 	// Iterate the allocations on the deployment and create a list of each allocID
@@ -40,7 +40,7 @@ func (l *levantDeployment) checkFailedDeployment(depID *string) {
 
 	// Inspect each allocation.
 	for _, id := range allocIDS {
-		log.Debug().Msgf("levant/failure_inspector: launching allocation inspector for alloc %v", id)
+		log.Debug().Msgf("levant/failure_inspector: launching allocation inspector for alloc %s", shortID(id))
 		go l.allocInspector(id, &wg)
 	}
 
@@ -56,7 +56,7 @@ func (l *levantDeployment) allocInspector(allocID string, wg *sync.WaitGroup) {
 
 	resp, _, err := l.nomad.Allocations().Info(allocID, nil)
 	if err != nil {
-		log.Error().Msgf("levant/failure_inspector: unable to query alloc %v: %v", allocID, err)
+		log.Error().Msgf("levant/failure_inspector: unable to query alloc %v: %s", shortID(allocID), err)
 		return
 	}
 
@@ -64,6 +64,9 @@ func (l *levantDeployment) allocInspector(allocID string, wg *sync.WaitGroup) {
 	// help debug deployment failures.
 	for _, task := range resp.TaskStates {
 		for _, event := range task.Events {
+			if l.isEventShown(event) {
+				continue
+			}
 
 			var desc string
 
@@ -138,10 +141,10 @@ func (l *levantDeployment) allocInspector(allocID string, wg *sync.WaitGroup) {
 			// information.
 			if desc != "" {
 				log.Error().Msgf("levant/failure_inspector: alloc %s incurred event %s because %s",
-					allocID, strings.ToLower(event.Type), strings.TrimSpace(desc))
+					shortID(allocID), strings.ToLower(event.Type), strings.TrimSpace(desc))
 			} else {
 				log.Error().Msgf("levant/failure_inspector: alloc %s logged for failure; event_type: %s; message: %s",
-					allocID,
+					shortID(allocID),
 					strings.ToLower(event.Type),
 					strings.ToLower(event.DisplayMessage))
 			}
